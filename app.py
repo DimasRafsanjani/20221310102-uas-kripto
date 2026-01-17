@@ -9,6 +9,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.exceptions import InvalidSignature
 from PIL import Image
+import cv2
+import numpy as np
 
 # Fungsi untuk menghasilkan pasangan kunci RSA
 def dimas20221310102_generate_rsa_keys():
@@ -247,10 +249,18 @@ if page == "📝 Pengirim Pesan":
                         mime="image/png"
                     )
                 
-                # Simpan data untuk verifikasi (opsional, untuk referensi)
+                # Simpan data untuk verifikasi
                 st.session_state['sender_message'] = message
                 st.session_state['sender_signature'] = signature_b64
                 st.session_state['sender_hash'] = hash_hex
+                st.session_state['qr_data'] = qr_data
+                
+                # Tampilkan data QRIS dengan tombol copy
+                st.subheader("📄 Data QRIS (JSON)")
+                st.code(qr_data, language="json")
+                
+                # Tombol untuk copy data QRIS
+                st.info("💡 **Tips:** Copy data JSON di atas untuk digunakan di halaman Verifikasi jika QR scanner tidak bekerja.")
                 
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
@@ -263,70 +273,43 @@ elif page == "✅ Penerima & Verifikasi":
     uploaded_file = st.file_uploader("Upload gambar QRIS", type=["png", "jpg", "jpeg"])
     
     if uploaded_file is not None:
-        # Baca gambar
+        # 1. Baca gambar dengan PIL
         img = Image.open(uploaded_file)
         st.image(img, caption="QRIS yang diupload", width=300)
         
-        # Coba decode QR Code dengan pyzbar
-        pyzbar_available = False
-        qr_data = None
-        
+        # 2. Proses Deteksi QR Code menggunakan OpenCV (Pengganti pyzbar)
         try:
-            from pyzbar import pyzbar
-            # Coba decode
-            decoded_objects = pyzbar.decode(img)
-            if decoded_objects:
-                qr_data = decoded_objects[0].data.decode('utf-8')
-                pyzbar_available = True
-        except ImportError:
-            st.error("❌ Library pyzbar tidak terinstall.")
-            st.info("💡 **Instalasi:** Jalankan `pip install pyzbar` di terminal/command prompt")
-            st.warning("⚠️ **Catatan Windows:** pyzbar memerlukan Visual C++ Redistributable. Jika error, download dari Microsoft.")
+            # Konversi PIL Image ke format yang bisa dibaca OpenCV (numpy array)
+            # OpenCV butuh array, bukan objek gambar PIL
+            img_array = np.array(img.convert('RGB'))
+            
+            # OpenCV menggunakan format BGR, kita konversi dari RGB
+            opencv_img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            
+            # Inisialisasi Detektor QR Code
+            detector = cv2.QRCodeDetector()
+            
+            # Deteksi dan Decode
+            # retval = data yang terbaca
+            # decoded_info = data, points, straight_qrcode
+            qr_data, bbox, straight_qrcode = detector.detectAndDecode(opencv_img)
+            
+            if qr_data:                
+                # Parse data menggunakan fungsi parse Anda
+                message, hash_hex, signature_b64 = dimas20221310102_parse_qris(qr_data)
+                
+                if message and signature_b64:
+                    st.session_state['qr_message'] = message
+                    st.session_state['qr_signature'] = signature_b64
+                    st.session_state['qr_hash'] = hash_hex
+                    st.success("✅ Data QRIS berhasil di-parse dan siap untuk verifikasi!")
+                else:
+                    st.error("❌ Format QRIS tidak valid! Pastikan QRIS dibuat dari aplikasi ini.")
+            else:
+                st.warning("⚠️ OpenCV tidak dapat mendeteksi QR Code. Pastikan gambar jelas/tidak buram.")
+                
         except Exception as e:
-            # Error DLL atau error lainnya
-            error_msg = str(e)
-            if "libzbar" in error_msg.lower() or "dll" in error_msg.lower():
-                st.error("❌ pyzbar memerlukan library tambahan di Windows.")
-                st.info("💡 **Solusi:**")
-                st.markdown("""
-                1. Install Visual C++ Redistributable dari Microsoft
-                2. Atau install pyzbar dengan: `pip install pyzbar`
-                3. Pastikan semua dependencies terinstall dengan benar
-                """)
-            else:
-                st.error(f"❌ Error membaca QR Code: {str(e)}")
-                st.info("💡 Pastikan gambar QRIS jelas dan tidak rusak.")
-        
-        if pyzbar_available and qr_data:
-            st.success("✅ QRIS berhasil dibaca!")
-            
-            # Parse data
-            message, hash_hex, signature_b64 = dimas20221310102_parse_qris(qr_data)
-            
-            if message and signature_b64:
-                st.session_state['qr_message'] = message
-                st.session_state['qr_signature'] = signature_b64
-                st.session_state['qr_hash'] = hash_hex
-                st.success("✅ Data QRIS berhasil di-parse dan siap untuk verifikasi!")
-            else:
-                st.error("❌ Format QRIS tidak valid! Pastikan QRIS dibuat dari aplikasi ini.")
-        elif not pyzbar_available:
-            st.warning("⚠️ QRIS tidak dapat dibaca. Pastikan pyzbar terinstall dengan benar.")
-    
-    # Verifikasi
-    st.markdown("---")
-    
-    # Tampilkan status sebelum tombol verifikasi
-    if 'qr_message' in st.session_state and st.session_state.get('qr_message'):
-        st.success("✅ Data QRIS sudah tersedia dan siap untuk verifikasi!")
-    else:
-        st.info("💡 **Cara menggunakan:**")
-        st.markdown("""
-        1. Buka halaman **'📝 Pengirim Pesan'** di sidebar
-        2. Masukkan pesan dan klik **'Buat Digital Signature & QRIS'**
-        3. Download gambar QRIS yang dihasilkan
-        4. Kembali ke halaman ini dan upload gambar QRIS di atas
-        """)
+            st.error(f"❌ Error membaca QR Code: {str(e)}")
     
     if st.button("🔍 Verifikasi Digital Signature", use_container_width=True, type="primary"):
         # Ambil data dari session state
